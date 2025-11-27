@@ -11,15 +11,10 @@ const db = admin.firestore();
 
 const app = express();
 
-// middlewares
 app.use(cors({ origin: true }));
 app.use(express.json());
 
-// =========================
-// ROUTES
-// =========================
-
-// Cek API hidup
+// ============== HEALTH CHECK =================
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -28,11 +23,11 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
-// Koleksi Firestore
+// ============== ITEMS COLLECTION =============
 const itemsCol = db.collection("items");
 
-// GET /items -> ambil semua barang
-app.get("/items", async (_req: Request, res: Response) => {
+// GET /items  -> list barang
+app.get("/items", async (_req: Request, res: Response): Promise<void> => {
   try {
     const snapshot = await itemsCol.get();
     const items = snapshot.docs.map((doc) => ({
@@ -40,13 +35,18 @@ app.get("/items", async (_req: Request, res: Response) => {
       ...doc.data(),
     }));
     res.json({ data: items });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to get items" });
+    return;
+  } catch (err: any) {
+    console.error("GET /items error:", err);
+    res.status(500).json({
+      error: "Failed to get items",
+      details: err?.message ?? String(err),
+    });
+    return;
   }
 });
 
-// POST /items -> tambah barang baru
+// POST /items  -> tambah barang
 app.post(
   "/items",
   async (req: Request, res: Response): Promise<void> => {
@@ -67,59 +67,82 @@ app.post(
         return;
       }
 
+      const now = new Date();
+
       const docRef = await itemsCol.add({
         name,
         sku,
-        category: category || "",
-        purchasePrice: purchasePrice || 0,
-        sellingPrice: sellingPrice || 0,
-        stock: stock || 0,
-        minStock: minStock || 0,
-        unit: unit || "pcs",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        category: category ?? "",
+        purchasePrice: purchasePrice ?? 0,
+        sellingPrice: sellingPrice ?? 0,
+        stock: stock ?? 0,
+        minStock: minStock ?? 0,
+        unit: unit ?? "pcs",
+        createdAt: now,
+        updatedAt: now,
       });
 
       const newDoc = await docRef.get();
       res.status(201).json({ id: newDoc.id, ...newDoc.data() });
       return;
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to create item" });
+    } catch (err: any) {
+      console.error("POST /items error:", err);
+      res.status(500).json({
+        error: "Failed to create item",
+        details: err?.message ?? String(err),
+      });
       return;
     }
   }
 );
 
-// PUT /items/:id -> update barang
-app.put("/items/:id", async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id;
-    const data = {
-      ...req.body,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+// PUT /items/:id  -> update barang
+app.put(
+  "/items/:id",
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const id = req.params.id;
+      const now = new Date();
 
-    await itemsCol.doc(id).update(data);
-    const updated = await itemsCol.doc(id).get();
-    res.json({ id: updated.id, ...updated.data() });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to update item" });
+      const data = {
+        ...req.body,
+        updatedAt: now,
+      };
+
+      await itemsCol.doc(id).update(data);
+      const updated = await itemsCol.doc(id).get();
+      res.json({ id: updated.id, ...updated.data() });
+      return;
+    } catch (err: any) {
+      console.error("PUT /items error:", err);
+      res.status(500).json({
+        error: "Failed to update item",
+        details: err?.message ?? String(err),
+      });
+      return;
+    }
   }
-});
+);
 
-// DELETE /items/:id -> hapus barang
-app.delete("/items/:id", async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id;
-    await itemsCol.doc(id).delete();
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to delete item" });
+// DELETE /items/:id  -> hapus barang
+app.delete(
+  "/items/:id",
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const id = req.params.id;
+      await itemsCol.doc(id).delete();
+      res.json({ success: true });
+      return;
+    } catch (err: any) {
+      console.error("DELETE /items error:", err);
+      res.status(500).json({
+        error: "Failed to delete item",
+        details: err?.message ?? String(err),
+      });
+      return;
+    }
   }
-});
+);
 
-// Export sebagai HTTPS Function v2
+// Export 1 fungsi HTTPS v2
 export const api = onRequest((req, res) => app(req, res));
