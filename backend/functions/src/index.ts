@@ -25,6 +25,7 @@ app.get("/health", (_req: Request, res: Response) => {
 
 // ============== ITEMS COLLECTION =============
 const itemsCol = db.collection("items");
+const salesCol = db.collection("sales");
 
 // GET /items  -> list barang
 app.get("/items", async (_req: Request, res: Response): Promise<void> => {
@@ -45,6 +46,106 @@ app.get("/items", async (_req: Request, res: Response): Promise<void> => {
     return;
   }
 });
+
+// GET /sales  -> daftar transaksi penjualan (sederhana dulu)
+app.get("/sales", async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const snapshot = await salesCol
+      .orderBy("createdAt", "desc")
+      .limit(50)
+      .get();
+
+    const sales = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    res.json({ data: sales });
+    return;
+  } catch (err: any) {
+    console.error("GET /sales error:", err);
+    res.status(500).json({
+      error: "Failed to get sales",
+      details: err?.message ?? String(err),
+    });
+    return;
+  }
+});
+
+// POST /sales  -> catat penjualan & update stok
+app.post(
+  "/sales",
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { itemId, quantity } = req.body;
+
+      if (!itemId || !quantity || quantity <= 0) {
+        res.status(400).json({
+          error: "itemId dan quantity (>0) wajib diisi",
+        });
+        return;
+      }
+
+      const now = new Date();
+
+      // Jalankan dalam transaksi supaya stok konsisten
+      await db.runTransaction(async (tx) => {
+        const itemRef = itemsCol.doc(itemId);
+        const itemSnap = await tx.get(itemRef);
+
+        if (!itemSnap.exists) {
+          throw new Error("Item not found");
+        }
+
+        const itemData = itemSnap.data() as any;
+        const currentStock = Number(itemData.stock ?? 0);
+        const unitPrice = Number(itemData.sellingPrice ?? 0);
+
+        if (currentStock < quantity) {
+          throw new Error("Stok tidak cukup");
+        }
+
+        const newStock = currentStock - quantity;
+        const totalPrice = unitPrice * quantity;
+
+        // update stok item
+        tx.update(itemRef, {
+          stock: newStock,
+          updatedAt: now,
+        });
+
+        // buat dokumen penjualan
+        const saleRef = salesCol.doc();
+        tx.set(saleRef, {
+          itemId,
+          itemName: itemData.name ?? "",
+          quantity,
+          unitPrice,
+          totalPrice,
+          createdAt: now,
+        });
+      });
+
+      res.status(201).json({ success: true });
+      return;
+    } catch (err: any) {
+      console.error("POST /sales error:", err);
+
+      // kalau error stok kurang, kirim jadi 400
+      const msg = err?.message ?? String(err);
+      const status = msg.includes("Stok tidak cukup") ||
+              msg.includes("Item not found")
+          ? 400
+          : 500;
+
+      res.status(status).json({
+        error: "Failed to create sale",
+        details: msg,
+      });
+      return;
+    }
+  }
+);
 
 // POST /items  -> tambah barang
 app.post(
