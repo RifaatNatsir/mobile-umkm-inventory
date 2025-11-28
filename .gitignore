@@ -1,0 +1,25 @@
+# Emulator data
+emulator-data/
+firebase-debug.log
+firebase-debug.*.log
+
+# Node.js (backend)
+backend/functions/node_modules/
+backend/functions/lib/
+
+# Flutter build files
+mobile/build/
+mobile/.dart_tool/
+mobile/.packages
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/android/.gradle/
+mobile/android/app/build/
+
+# VSCode settings
+.vscode/
+
+# Misc
+.DS_Store
+*.log
+*.local
