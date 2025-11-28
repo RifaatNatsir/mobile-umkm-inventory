@@ -96,6 +96,7 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
     }
 
     const now = new Date();
+    const lowStockItems: any[] = [];
 
     await db.runTransaction(async (tx) => {
       // 1) Siapkan ref untuk semua item
@@ -124,6 +125,7 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
         const itemData: any = snap.data();
         const currentStock = Number(itemData.stock ?? 0);
         const unitPrice = Number(itemData.sellingPrice ?? 0);
+        const minStock = Number(itemData.minStock ?? 0);
 
         if (!quantity || quantity <= 0) {
           throw new Error("ItemId dan quantity (>0) wajib diisi");
@@ -152,6 +154,15 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
           totalPrice,
         });
 
+        if (newStock <= minStock) {
+          lowStockItems.push({
+            itemId,
+            itemName: itemData.name ?? "",
+            currentStock: newStock,
+            minStock,
+          });
+        }
+
         grandTotal += totalPrice;
       });
 
@@ -164,7 +175,10 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
       });
     });
 
-    res.status(201).json({ success: true });
+    res.status(201).json({ 
+      success: true,
+      lowStockItems 
+    });
   } catch (err: any) {
     console.error("POST /sales error:", err);
     const msg = err?.message ?? String(err);

@@ -155,22 +155,65 @@ class _SalesPageState extends State<SalesPage> {
               })
           .toList();
 
-      final ok = await _apiClient.createSaleFromItems(payload);
+      final result = await _apiClient.createSaleFromItems(payload);
 
-      if (ok) {
-        setState(() {
-          _cart.clear();
-          _futureSales = _apiClient.getSales();
-        });
+      if (result['success'] == true) {
+      // Ambil list barang stok menipis dari backend
+      final lowStock = (result['lowStockItems'] as List?) ?? [];
 
-        messenger.showSnackBar(
-          const SnackBar(content: Text("Transaksi berhasil disimpan")),
-        );
-      } else {
-        messenger.showSnackBar(
-          const SnackBar(content: Text("Gagal menyimpan transaksi")),
+      setState(() {
+        _cart.clear();
+        _futureSales = _apiClient.getSales();
+      });
+
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Transaksi berhasil disimpan")),
+      );
+
+      // Jika ada stok menipis, tampilkan notifikasi dialog
+      if (lowStock.isNotEmpty && context.mounted) {
+        showDialog(
+          context: context,
+          builder: (context) {
+            return AlertDialog(
+              title: const Text("Stok Menipis"),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    const Text(
+                      "Beberapa barang stoknya menipis:",
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    ...lowStock.map((e) {
+                      final data = Map<String, dynamic>.from(e);
+                      return ListTile(
+                        title: Text(data['itemName'] ?? ''),
+                        subtitle: Text(
+                          "Stok sekarang: ${data['currentStock']} (min: ${data['minStock']})",
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Tutup"),
+                ),
+              ],
+            );
+          },
         );
       }
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Gagal menyimpan transaksi")),
+      );
+    }
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text("Error: $e")),
@@ -271,10 +314,11 @@ class _SalesPageState extends State<SalesPage> {
                     final date = s.createdAt;
                     final dateText =
                         "${date.day}-${date.month}-${date.year}";
+                    final nomor = sales.length - index;
 
                     return ListTile(
                       leading: const Icon(Icons.receipt_long),
-                      title: Text("Transaksi ${index + 1}"),
+                      title: Text("Transaksi $nomor"),
                       subtitle: Text(
                         "Total: Rp${s.totalPrice.toStringAsFixed(0)}",
                       ),

@@ -210,10 +210,15 @@ class _ItemsPageState extends State<ItemsPage> {
             itemCount: items.length,
             itemBuilder: (_, i) {
               final item = items[i];
+              final isLowStock = item.stock <= item.minStock;
               return ListTile(
                 title: Text(item.name),
                 subtitle: Text(
-                  "SKU: ${item.sku}\nStok: ${item.stock} ${item.unit}",
+                  "SKU: ${item.sku}\nStok: ${item.stock} ${item.unit}"
+                  "${isLowStock ? " • STOK MENIPIS" : ""}",
+                ),
+                subtitleTextStyle: TextStyle(
+                  color: isLowStock ? Colors.red : null,
                 ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,

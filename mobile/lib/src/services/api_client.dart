@@ -47,13 +47,13 @@ class ApiClient {
   return res.statusCode == 201 || res.data['success'] == true;
   }
 
-  Future<bool> createSaleFromItems(
+  Future<Map<String, dynamic>> createSaleFromItems(
     List<Map<String, dynamic>> itemsPayload) async {
   final res = await _dio.post('/sales', data: {
     'items': itemsPayload,
   });
 
-  return res.statusCode == 201 || res.data['success'] == true;
+  return Map<String, dynamic>.from(res.data);
   }
 
   Future<void> deleteItem(String id) async {
