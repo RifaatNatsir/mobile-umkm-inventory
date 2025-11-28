@@ -148,26 +148,76 @@ class _SalesPageState extends State<SalesPage> {
     final messenger = ScaffoldMessenger.of(context);
 
     try {
-      for (final c in _cart) {
-        await _apiClient.createSale(
-          itemId: c.item.id,
-          quantity: c.quantity,
+      final payload = _cart
+          .map((c) => {
+                'itemId': c.item.id,
+                'quantity': c.quantity,
+              })
+          .toList();
+
+      final ok = await _apiClient.createSaleFromItems(payload);
+
+      if (ok) {
+        setState(() {
+          _cart.clear();
+          _futureSales = _apiClient.getSales();
+        });
+
+        messenger.showSnackBar(
+          const SnackBar(content: Text("Transaksi berhasil disimpan")),
+        );
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(content: Text("Gagal menyimpan transaksi")),
         );
       }
-
-      setState(() {
-        _cart.clear();
-        _futureSales = _apiClient.getSales();
-      });
-
-      messenger.showSnackBar(
-        const SnackBar(content: Text("Transaksi berhasil disimpan")),
-      );
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text("Gagal menyimpan transaksi: $e")),
+        SnackBar(content: Text("Error: $e")),
       );
     }
+  }
+
+  void _showSaleDetail(Sale sale) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Detail Transaksi'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                ...sale.items.map(
+                  (i) => ListTile(
+                    title: Text(i.itemName),
+                    subtitle: Text(
+                        "Qty: ${i.quantity} x Rp${i.unitPrice.toStringAsFixed(0)}"),
+                    trailing: Text(
+                      "Rp${i.totalPrice.toStringAsFixed(0)}",
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+                const Divider(),
+                Text(
+                  "Total: Rp${sale.totalPrice.toStringAsFixed(0)}",
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Tutup"),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -188,7 +238,7 @@ class _SalesPageState extends State<SalesPage> {
       ),
       body: Column(
         children: [
-          // List transaksi
+          // List transaksi (1 dokumen = 1 keranjang)
           Expanded(
             child: FutureBuilder<List<Sale>>(
               future: _futureSales,
@@ -224,9 +274,8 @@ class _SalesPageState extends State<SalesPage> {
 
                     return ListTile(
                       leading: const Icon(Icons.receipt_long),
-                      title: Text(s.itemName),
+                      title: Text("Transaksi ${index + 1}"),
                       subtitle: Text(
-                        "Qty: ${s.quantity} x Rp${s.unitPrice.toStringAsFixed(0)}\n"
                         "Total: Rp${s.totalPrice.toStringAsFixed(0)}",
                       ),
                       trailing: Text(
@@ -234,6 +283,7 @@ class _SalesPageState extends State<SalesPage> {
                         style:
                             const TextStyle(color: Colors.grey),
                       ),
+                      onTap: () => _showSaleDetail(s),
                     );
                   },
                 );
@@ -241,7 +291,7 @@ class _SalesPageState extends State<SalesPage> {
             ),
           ),
 
-          // Keranjang kasir
+          // Keranjang kasir (bisa hapus item)
           if (_cart.isNotEmpty) ...[
             const Divider(),
             Padding(
@@ -256,19 +306,36 @@ class _SalesPageState extends State<SalesPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ..._cart.map(
-                    (c) => ListTile(
-                      title: Text(c.item.name),
-                      subtitle: Text(
-                        "Qty: ${c.quantity} x Rp${c.item.sellingPrice.toStringAsFixed(0)}",
-                      ),
-                      trailing: Text(
-                        "Rp${c.total.toStringAsFixed(0)}",
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
+                  ..._cart.asMap().entries.map(
+                    (entry) {
+                      final idx = entry.key;
+                      final c = entry.value;
+                      return ListTile(
+                        title: Text(c.item.name),
+                        subtitle: Text(
+                          "Qty: ${c.quantity} x Rp${c.item.sellingPrice.toStringAsFixed(0)}",
                         ),
-                      ),
-                    ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              "Rp${c.total.toStringAsFixed(0)}",
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete),
+                              onPressed: () {
+                                setState(() {
+                                  _cart.removeAt(idx);
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 8),
                   Text(
