@@ -26,6 +26,55 @@ app.get("/health", (_req: Request, res: Response) => {
 // ============== ITEMS COLLECTION =============
 const itemsCol = db.collection("items");
 const salesCol = db.collection("sales");
+const usersCol = db.collection("users");
+
+// ========== LOGIN ==========
+app.post("/login", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      res.status(400).json({ error: "Email dan password wajib diisi" });
+      return;
+    }
+
+    const snap = await usersCol.where("email", "==", email).limit(1).get();
+
+    if (snap.empty) {
+      res.status(401).json({ error: "Email atau password salah" });
+      return;
+    }
+
+    const doc = snap.docs[0];
+    const data = doc.data() as {
+      name?: string;
+      email?: string;
+      password?: string;
+    };
+
+    if (data.password !== password) {
+      res.status(401).json({ error: "Email atau password salah" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: doc.id,
+        name: data.name ?? "",
+        email: data.email ?? "",
+      },
+    });
+    return;
+  } catch (err: any) {
+    console.error("POST /login error:", err);
+    res.status(500).json({
+      error: "Login gagal",
+      details: err?.message ?? String(err),
+    });
+    return;
+  }
+});
 
 // GET /items  -> list barang
 app.get("/items", async (_req: Request, res: Response): Promise<void> => {
