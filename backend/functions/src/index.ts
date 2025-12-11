@@ -50,6 +50,7 @@ app.post("/login", async (req: Request, res: Response): Promise<void> => {
       name?: string;
       email?: string;
       password?: string;
+      role?: string;
     };
 
     if (data.password !== password) {
@@ -63,16 +64,15 @@ app.post("/login", async (req: Request, res: Response): Promise<void> => {
         id: doc.id,
         name: data.name ?? "",
         email: data.email ?? "",
+        role: data.role ?? "cashier",
       },
     });
-    return;
   } catch (err: any) {
     console.error("POST /login error:", err);
     res.status(500).json({
       error: "Login gagal",
       details: err?.message ?? String(err),
     });
-    return;
   }
 });
 

@@ -3,9 +3,12 @@ import 'items/items_page.dart';
 import 'sales/sales_page.dart';
 import 'reports/reports_page.dart';
 import 'auth/login_page.dart';
+import '../models/app_user.dart';
 
 class HomePage extends StatelessWidget {
-  const HomePage({super.key});
+  final AppUser user;
+
+  const HomePage({super.key, required this.user});
 
   void _goTo(BuildContext context, Widget page) {
     Navigator.push(
@@ -17,6 +20,8 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isOwner = user.role == 'owner';
+    // final isOwner = false;
 
     return Scaffold(
       appBar: AppBar(
@@ -28,23 +33,25 @@ class HomePage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Salam singkat
+              // Salam
               Text(
-                'Halo 👋',
+                'Halo, ${user.name.isNotEmpty ? user.name : "Pengguna"} 👋',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
               ),
               const SizedBox(height: 4),
               Text(
-                'Kelola barang, transaksi & laporan usaha.',
+                isOwner
+                    ? 'Anda login sebagai Pemilik Toko.'
+                    : 'Anda login sebagai Kasir. Akses dibatasi ke pencatatan transaksi.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.grey[700],
                     ),
               ),
               const SizedBox(height: 16),
 
-              // Card informasi kecil (opsional)
+              // Info kecil
               Container(
                 width: double.infinity,
                 padding:
@@ -59,7 +66,9 @@ class HomePage extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Pastikan stok dan transaksi selalu diperbarui setiap hari.',
+                        isOwner
+                            ? 'Gunakan menu di bawah untuk mengelola stok, transaksi, dan laporan.'
+                            : 'Kasir hanya dapat mencatat transaksi penjualan.',
                         style: const TextStyle(fontSize: 12),
                       ),
                     ),
@@ -79,13 +88,7 @@ class HomePage extends StatelessWidget {
               Expanded(
                 child: ListView(
                   children: [
-                    _SmallMenuCard(
-                      icon: Icons.inventory_2_rounded,
-                      iconColor: scheme.primary,
-                      title: 'Manajemen Barang',
-                      subtitle: 'Tambah, edit, dan pantau stok barang',
-                      onTap: () => _goTo(context, const ItemsPage()),
-                    ),
+                    // MENU YANG SELALU ADA (PEMILIK & KASIR)
                     _SmallMenuCard(
                       icon: Icons.point_of_sale_rounded,
                       iconColor: scheme.tertiary,
@@ -93,13 +96,25 @@ class HomePage extends StatelessWidget {
                       subtitle: 'Catat penjualan dengan keranjang belanja',
                       onTap: () => _goTo(context, const SalesPage()),
                     ),
-                    _SmallMenuCard(
-                      icon: Icons.bar_chart_rounded,
-                      iconColor: Colors.green,
-                      title: 'Laporan Usaha',
-                      subtitle: 'Lihat omset, laba, dan grafik penjualan',
-                      onTap: () => _goTo(context, const ReportsPage()),
-                    ),
+
+                    // MENU KHUSUS PEMILIK
+                    if (isOwner) ...[
+                      _SmallMenuCard(
+                        icon: Icons.inventory_2_rounded,
+                        iconColor: scheme.primary,
+                        title: 'Manajemen Barang',
+                        subtitle: 'Tambah, edit, dan pantau stok barang',
+                        onTap: () => _goTo(context, const ItemsPage()),
+                      ),
+                      _SmallMenuCard(
+                        icon: Icons.bar_chart_rounded,
+                        iconColor: Colors.green,
+                        title: 'Laporan Usaha',
+                        subtitle: 'Lihat omset, laba, dan grafik penjualan',
+                        onTap: () => _goTo(context, const ReportsPage()),
+                      ),
+                    ],
+
                     const SizedBox(height: 8),
                     _SmallMenuCard(
                       icon: Icons.logout_rounded,
@@ -110,7 +125,8 @@ class HomePage extends StatelessWidget {
                         Navigator.pushAndRemoveUntil(
                           context,
                           MaterialPageRoute(
-                              builder: (_) => const LoginPage()),
+                            builder: (_) => const LoginPage(),
+                          ),
                           (route) => false,
                         );
                       },

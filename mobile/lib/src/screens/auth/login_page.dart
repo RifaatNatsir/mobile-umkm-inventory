@@ -28,18 +28,30 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _loading = true);
 
     try {
-      final AppUser user = await _api.login(
-        email: _emailC.text.trim(),
-        password: _passC.text.trim(),
+      AppUser user = await _api.login(
+      email: _emailC.text.trim(),
+      password: _passC.text.trim(),
+    );
+
+    // OVERRIDE ROLE sementara berdasarkan email
+    if (user.email == 'cashier1@gmail.com') {
+      user = AppUser(
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: 'cashier',
       );
+    }
+
+      debugPrint('ROLE USER LOGIN: ${user.role}');
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomePage()),
+        MaterialPageRoute(builder: (_) => HomePage(user: user)),
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Selamat datang, ${user.name}')),
+        SnackBar(content: Text('Selamat datang, ${user.name} (role: ${user.role})')),
       );
     } catch (e) {
       if (!mounted) return;
