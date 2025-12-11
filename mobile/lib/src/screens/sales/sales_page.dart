@@ -1,19 +1,8 @@
 import 'package:flutter/material.dart';
+
+import '../../services/api_client.dart';
 import '../../models/item.dart';
 import '../../models/sale.dart';
-import '../../services/api_client.dart';
-
-class CartItem {
-  final Item item;
-  int quantity;
-
-  CartItem({
-    required this.item,
-    required this.quantity,
-  });
-
-  double get total => item.sellingPrice * quantity;
-}
 
 class SalesPage extends StatefulWidget {
   const SalesPage({super.key});
@@ -23,383 +12,892 @@ class SalesPage extends StatefulWidget {
 }
 
 class _SalesPageState extends State<SalesPage> {
-  final ApiClient _apiClient = ApiClient();
+  final _api = ApiClient();
 
-  late Future<List<Sale>> _futureSales;
-  final List<CartItem> _cart = [];
-
-  double get cartTotal =>
-      _cart.fold(0, (sum, c) => sum + c.total);
+  late Future<void> _initFuture;
+  List<Item> _items = [];
+  List<Sale> _sales = [];
+  final List<_CartItem> _cart = [];
 
   @override
   void initState() {
     super.initState();
-    _futureSales = _apiClient.getSales();
+    _initFuture = _loadData();
   }
 
-  Future<void> _reloadSales() async {
+  Future<void> _loadData() async {
+    _items = await _api.getItems();
+    _sales = await _api.getSales();
+  }
+
+  Future<void> _reload() async {
     setState(() {
-      _futureSales = _apiClient.getSales();
+      _initFuture = _loadData();
     });
   }
 
-  Future<void> _showAddSaleDialog() async {
-    final quantityController = TextEditingController();
-    Item? selectedItem;
-
-    List<Item> items;
-    try {
-      items = await _apiClient.getItems();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal memuat daftar barang: $e')),
-      );
-      return;
-    }
-
-    if (items.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Belum ada barang untuk dijual')),
-      );
-      return;
-    }
-
-    List<Item> filtered = List.from(items);
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              title: const Text('Tambah ke Keranjang'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    decoration: const InputDecoration(
-                      labelText: 'Cari barang',
-                    ),
-                    onChanged: (value) {
-                      setStateDialog(() {
-                        filtered = items
-                            .where((i) => i.name
-                                .toLowerCase()
-                                .contains(value.toLowerCase()))
-                            .toList();
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<Item>(
-                    decoration:
-                        const InputDecoration(labelText: "Pilih barang"),
-                    items: filtered.map((i) {
-                      return DropdownMenuItem(
-                        value: i,
-                        child: Text("${i.name} (Stok: ${i.stock})"),
-                      );
-                    }).toList(),
-                    onChanged: (val) => selectedItem = val,
-                  ),
-                  TextField(
-                    controller: quantityController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Jumlah'),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text("Batal"),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text("Tambah"),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (result == true && selectedItem != null) {
-      final qty = int.tryParse(quantityController.text) ?? 0;
-      if (qty <= 0) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Jumlah tidak valid")),
-        );
-        return;
-      }
-
+  void _addToCart(Item item) {
+    final idx = _cart.indexWhere((c) => c.item.id == item.id);
+    if (idx >= 0) {
       setState(() {
-        _cart.add(CartItem(item: selectedItem!, quantity: qty));
+        _cart[idx].quantity++;
+      });
+    } else {
+      setState(() {
+        _cart.add(_CartItem(item: item, quantity: 1));
       });
     }
   }
+
+  void _removeFromCart(_CartItem cartItem) {
+    setState(() {
+      _cart.remove(cartItem);
+    });
+  }
+
+  void _changeQty(_CartItem cartItem, int delta) {
+    setState(() {
+      final newQty = cartItem.quantity + delta;
+      if (newQty <= 0) {
+        _cart.remove(cartItem);
+      } else {
+        cartItem.quantity = newQty;
+      }
+    });
+  }
+
+  void _showLowStockSheet(List<dynamic> lowStock) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _LowStockSheet(lowStock: lowStock),
+    );
+  }
+
+  double get _cartTotal {
+    double sum = 0;
+    for (final c in _cart) {
+      sum += (c.item.sellingPrice ?? 0) * c.quantity;
+    }
+    return sum;
+  }
+
+  void _openSaleDetail(Sale sale) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) {
+        return _SaleDetailSheet(sale: sale);
+      },
+    );
+  }
+
 
   Future<void> _submitCart() async {
     if (_cart.isEmpty) return;
     final messenger = ScaffoldMessenger.of(context);
 
     try {
-      final payload = _cart
+      final itemsPayload = _cart
           .map((c) => {
                 'itemId': c.item.id,
                 'quantity': c.quantity,
               })
           .toList();
 
-      final result = await _apiClient.createSaleFromItems(payload);
+      final res = await _api.createSale(itemsPayload);
 
-      if (result['success'] == true) {
-      // Ambil list barang stok menipis dari backend
-      final lowStock = (result['lowStockItems'] as List?) ?? [];
+      final lowStock = (res['lowStockItems'] as List?) ?? [];
 
       setState(() {
         _cart.clear();
-        _futureSales = _apiClient.getSales();
+        _initFuture = _loadData();
       });
 
-      messenger.showSnackBar(
-        const SnackBar(content: Text("Transaksi berhasil disimpan")),
-      );
-
-      // Jika ada stok menipis, tampilkan notifikasi dialog
-      if (lowStock.isNotEmpty && context.mounted) {
-        showDialog(
-          context: context,
-          builder: (context) {
-            return AlertDialog(
-              title: const Text("Stok Menipis"),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    const Text(
-                      "Beberapa barang stoknya menipis:",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    ...lowStock.map((e) {
-                      final data = Map<String, dynamic>.from(e);
-                      return ListTile(
-                        title: Text(data['itemName'] ?? ''),
-                        subtitle: Text(
-                          "Stok sekarang: ${data['currentStock']} (min: ${data['minStock']})",
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Tutup"),
-                ),
-              ],
-            );
-          },
+      if (lowStock.isNotEmpty) {
+        _showLowStockSheet(lowStock);
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Transaksi berhasil disimpan')),
         );
       }
-    } else {
-      messenger.showSnackBar(
-        const SnackBar(content: Text("Gagal menyimpan transaksi")),
-      );
-    }
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text("Error: $e")),
+        SnackBar(content: Text('Gagal menyimpan transaksi: $e')),
       );
     }
   }
 
-  void _showSaleDetail(Sale sale) {
-    showDialog(
+  Future<void> _openSelectItem() async {
+    final Item? selected = await showModalBottomSheet<Item>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Detail Transaksi'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                ...sale.items.map(
-                  (i) => ListTile(
-                    title: Text(i.itemName),
-                    subtitle: Text(
-                        "Qty: ${i.quantity} x Rp${i.unitPrice.toStringAsFixed(0)}"),
-                    trailing: Text(
-                      "Rp${i.totalPrice.toStringAsFixed(0)}",
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-                const Divider(),
-                Text(
-                  "Total: Rp${sale.totalPrice.toStringAsFixed(0)}",
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Tutup"),
-            ),
-          ],
-        );
-      },
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _SelectItemSheet(items: _items),
     );
+
+    if (selected != null) {
+      _addToCart(selected);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Transaksi Penjualan"),
+        title: const Text('Transaksi Penjualan'),
         actions: [
           IconButton(
+            onPressed: _reload,
             icon: const Icon(Icons.refresh),
-            onPressed: _reloadSales,
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showAddSaleDialog,
-        child: const Icon(Icons.add),
-      ),
-      body: Column(
-        children: [
-          // List transaksi (1 dokumen = 1 keranjang)
-          Expanded(
-            child: FutureBuilder<List<Sale>>(
-              future: _futureSales,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState ==
-                    ConnectionState.waiting) {
-                  return const Center(
-                      child: CircularProgressIndicator());
-                }
+      body: SafeArea(
+        child: FutureBuilder<void>(
+          future: _initFuture,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snap.hasError) {
+              return Center(
+                child: Text('Error: ${snap.error}'),
+              );
+            }
 
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Text('Error: ${snapshot.error}'),
-                  );
-                }
-
-                final sales = snapshot.data ?? [];
-
-                if (sales.isEmpty) {
-                  return const Center(
-                      child: Text("Belum ada transaksi"));
-                }
-
-                return ListView.separated(
-                  itemCount: sales.length,
-                  separatorBuilder: (_, __) =>
-                      const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final s = sales[index];
-                    final date = s.createdAt;
-                    final dateText =
-                        "${date.day}-${date.month}-${date.year}";
-                    final nomor = sales.length - index;
-
-                    return ListTile(
-                      leading: const Icon(Icons.receipt_long),
-                      title: Text("Transaksi $nomor"),
-                      subtitle: Text(
-                        "Total: Rp${s.totalPrice.toStringAsFixed(0)}",
+            return Column(
+              children: [
+                // Section keranjang
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Keranjang',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: _openSelectItem,
+                            icon: const Icon(Icons.add_shopping_cart_outlined),
+                            label: const Text('Tambah barang'),
+                          ),
+                        ],
                       ),
-                      trailing: Text(
-                        dateText,
-                        style:
-                            const TextStyle(color: Colors.grey),
-                      ),
-                      onTap: () => _showSaleDetail(s),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-
-          // Keranjang kasir (bisa hapus item)
-          if (_cart.isNotEmpty) ...[
-            const Divider(),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                children: [
-                  const Text(
-                    "Keranjang",
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ..._cart.asMap().entries.map(
-                    (entry) {
-                      final idx = entry.key;
-                      final c = entry.value;
-                      return ListTile(
-                        title: Text(c.item.name),
-                        subtitle: Text(
-                          "Qty: ${c.quantity} x Rp${c.item.sellingPrice.toStringAsFixed(0)}",
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                      const SizedBox(height: 8),
+                      if (_cart.isEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text(
+                            'Belum ada barang di keranjang.\nTap "Tambah barang" untuk memilih.',
+                            style:
+                                TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        )
+                      else
+                        Column(
                           children: [
-                            Text(
-                              "Rp${c.total.toStringAsFixed(0)}",
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
+                            ..._cart.map(
+                              (c) => Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                child: _CartItemTile(
+                                  cartItem: c,
+                                  onInc: () => _changeQty(c, 1),
+                                  onDec: () => _changeQty(c, -1),
+                                  onRemove: () => _removeFromCart(c),
+                                ),
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.delete),
-                              onPressed: () {
-                                setState(() {
-                                  _cart.removeAt(idx);
-                                });
-                              },
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Text(
+                                  'Total',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Text(
+                                  'Rp${_cartTotal.toStringAsFixed(0)}',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: scheme.primary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: _submitCart,
+                                icon: const Icon(Icons.check_circle_outline),
+                                label: const Text('Selesaikan transaksi'),
+                              ),
                             ),
                           ],
                         ),
-                      );
-                    },
+                    ],
                   ),
-                  const SizedBox(height: 8),
+                ),
+
+                const Divider(height: 1),
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Text(
+                        'Riwayat Transaksi',
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Riwayat transaksi list
+                Expanded(
+                  child: _sales.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Belum ada transaksi penjualan.',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 4),
+                          itemCount: _sales.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 6),
+                          itemBuilder: (context, index) {
+                            final sale = _sales[index];
+                            final date = _parseDate(sale.createdAt);
+                            final itemCount = sale.items.length;
+
+                            return Card(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
+                                leading: CircleAvatar(
+                                  backgroundColor: scheme.primary.withOpacity(0.12),
+                                  child: const Icon(
+                                    Icons.receipt_long_outlined,
+                                    size: 20,
+                                  ),
+                                ),
+                                title: Text(
+                                  'Rp${sale.totalPrice.toStringAsFixed(0)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  '${_formatDateTime(date)} • $itemCount item',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                trailing: const Icon(Icons.chevron_right_rounded, size: 18),
+                                onTap: () => _openSaleDetail(sale),   // ⬅️ ini yang bikin bisa diklik
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  DateTime _parseDate(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw is String) {
+      return DateTime.tryParse(raw) ?? DateTime.now();
+    }
+    return DateTime.now();
+  }
+
+  String _formatDateTime(DateTime d) {
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '${two(d.day)}-${two(d.month)}-${d.year} ${two(d.hour)}:${two(d.minute)}';
+  }
+}
+
+/// ===== MODEL KERANJANG LOKAL =====
+
+class _CartItem {
+  final Item item;
+  int quantity;
+
+  _CartItem({
+    required this.item,
+    this.quantity = 1,
+  });
+}
+
+/// ====== WIDGET CART ITEM TILE ======
+
+class _CartItemTile extends StatelessWidget {
+  final _CartItem cartItem;
+  final VoidCallback onInc;
+  final VoidCallback onDec;
+  final VoidCallback onRemove;
+
+  const _CartItemTile({
+    required this.cartItem,
+    required this.onInc,
+    required this.onDec,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final price = cartItem.item.sellingPrice ?? 0;
+    final total = price * cartItem.quantity;
+
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    "Total: Rp${cartTotal.toStringAsFixed(0)}",
+                    cartItem.item.name,
                     style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: _submitCart,
-                    icon: const Icon(Icons.check),
-                    label: const Text("Selesaikan Transaksi"),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Rp${price.toStringAsFixed(0)} / ${cartItem.item.unit ?? "pcs"}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Subtotal: Rp${total.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: onDec,
+                  icon: const Icon(Icons.remove_circle_outline),
+                  tooltip: 'Kurangi',
+                ),
+                Text(
+                  '${cartItem.quantity}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                IconButton(
+                  onPressed: onInc,
+                  icon: const Icon(Icons.add_circle_outline),
+                  tooltip: 'Tambah',
+                ),
+              ],
+            ),
+            IconButton(
+              onPressed: onRemove,
+              icon: const Icon(Icons.close_rounded),
+              tooltip: 'Hapus dari keranjang',
+            ),
           ],
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ====== SHEET PILIH BARANG ======
+
+class _SelectItemSheet extends StatefulWidget {
+  final List<Item> items;
+  const _SelectItemSheet({required this.items});
+
+  @override
+  State<_SelectItemSheet> createState() => _SelectItemSheetState();
+}
+
+class _SelectItemSheetState extends State<_SelectItemSheet> {
+  final _searchC = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchC.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets.bottom;
+
+    final filtered = widget.items.where((item) {
+      final q = _searchC.text.toLowerCase();
+      if (q.isEmpty) return true;
+      return item.name.toLowerCase().contains(q) ||
+          item.sku.toLowerCase().contains(q);
+    }).toList();
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsets),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.transparent,
+        ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Material(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24),
+              ),
+              color: Theme.of(context).scaffoldBackgroundColor,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    Text(
+                      'Pilih Barang',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _searchC,
+                      decoration: const InputDecoration(
+                        hintText: 'Cari nama / SKU barang...',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 300,
+                      child: filtered.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'Tidak ada barang yang cocok.',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: filtered.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 6),
+                              itemBuilder: (context, index) {
+                                final item = filtered[index];
+                                return Card(
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: ListTile(
+                                    title: Text(item.name),
+                                    subtitle: Text(
+                                      'SKU: ${item.sku} • Stok: ${item.stock} ${item.unit ?? "pcs"}',
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                    trailing: Text(
+                                      'Rp${(item.sellingPrice ?? 0).toStringAsFixed(0)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    onTap: () =>
+                                        Navigator.pop<Item>(context, item),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SaleDetailSheet extends StatelessWidget {
+  final Sale sale;
+  const _SaleDetailSheet({required this.sale});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final date = _parseDateStatic(sale.createdAt);
+
+    return Container(
+      decoration: const BoxDecoration(color: Colors.transparent),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Material(
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(24),
+            ),
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 18,
+              ),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    Text(
+                      'Detail Transaksi',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatDateTimeStatic(date),
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // List item transaksi
+                    SizedBox(
+                      height: 260,
+                      child: ListView.separated(
+                        itemCount: sale.items.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 6),
+                        itemBuilder: (context, index) {
+                          final item = sale.items[index];
+                          final qty = item.quantity;
+                          final unitPrice = item.unitPrice;
+                          final total = item.totalPrice;
+
+                          return Card(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.itemName,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Qty: $qty • Rp${unitPrice.toStringAsFixed(0)}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Text(
+                                    'Rp${total.toStringAsFixed(0)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Total
+                    Row(
+                      children: [
+                        const Text(
+                          'Total',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          'Rp${sale.totalPrice.toStringAsFixed(0)}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                            color: scheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Tutup'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Helper statis karena kita di Stateless dan di luar _SalesPageState
+  static DateTime _parseDateStatic(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw is String) {
+      return DateTime.tryParse(raw) ?? DateTime.now();
+    }
+    return DateTime.now();
+  }
+
+  static String _formatDateTimeStatic(DateTime d) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(d.day)}-${two(d.month)}-${d.year} ${two(d.hour)}:${two(d.minute)}';
+  }
+}
+
+class _LowStockSheet extends StatelessWidget {
+  final List<dynamic> lowStock;
+
+  const _LowStockSheet({required this.lowStock});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Container(
+      decoration: const BoxDecoration(color: Colors.transparent),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Material(
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(24),
+            ),
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 18,
+              ),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.orange[700],
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Stok barang menipis',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Beberapa barang sudah mencapai atau di bawah stok minimum:',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 220,
+                      child: ListView.separated(
+                        itemCount: lowStock.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 6),
+                        itemBuilder: (context, index) {
+                          final data = lowStock[index] as Map<String, dynamic>;
+                          final name = data['itemName'] ?? 'Tanpa nama';
+                          final currentStock = data['currentStock'] ?? 0;
+                          final minStock = data['minStock'] ?? 0;
+
+                          return Card(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 32,
+                                    height: 32,
+                                    decoration: BoxDecoration(
+                                      color: scheme.error.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Icon(
+                                      Icons.inventory_2_outlined,
+                                      size: 18,
+                                      color: scheme.error,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Stok: $currentStock • Minimum: $minStock',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Mengerti'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

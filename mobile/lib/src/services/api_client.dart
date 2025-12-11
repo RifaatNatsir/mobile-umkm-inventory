@@ -20,17 +20,18 @@ class ApiClient {
     return data.map((e) => Item.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  Future<Item> createItem(Item item) async {
-    final response = await _dio.post('/items', data: item.toJson());
-    return Item.fromJson(response.data as Map<String, dynamic>);
+  Future<Item> createItem(Map<String, dynamic> data) async {
+    final resp = await _dio.post('/items', data: data);
+    final json = resp.data;
+
+    return Item.fromJson(json); // sesuaikan dengan konstruktor model mu
   }
 
-  Future<Item> updateItem(Item item) async {
-    final response = await _dio.put(
-      '/items/${item.id}',
-      data: item.toJson(),
-    );
-    return Item.fromJson(response.data as Map<String, dynamic>);
+  Future<Item> updateItem(String id, Map<String, dynamic> data) async {
+    final resp = await _dio.put('/items/$id', data: data);
+    final json = resp.data;
+
+    return Item.fromJson(json);
   }
 
   Future<List<Sale>> getSales() async {
@@ -41,16 +42,12 @@ class ApiClient {
       .toList();
   }
 
-  Future<bool> createSale({
-  required String itemId,
-  required int quantity,
-  }) async {
-  final res = await _dio.post('/sales', data: {
-    "itemId": itemId,
-    "quantity": quantity
-  });
+  Future<Map<String, dynamic>> createSale(List<Map<String, dynamic>> items) async {
+    final res = await _dio.post('/sales', data: {
+      "items": items,
+    });
 
-  return res.statusCode == 201 || res.data['success'] == true;
+    return res.data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> createSaleFromItems(
