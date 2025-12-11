@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import '../models/item.dart';
 import '../models/sale.dart';
 import '../models/app_user.dart';
+import '../models/report_summary.dart';
 
 class ApiClient {
   static const String baseUrl =
@@ -87,6 +88,17 @@ class ApiClient {
           e.response?.data['message'] ??
           'Login gagal';
       throw Exception(msg);
+    }
+  }
+
+  Future<ReportSummary> getReportSummary() async {
+    final res = await _dio.get('/reports/summary');
+    if (res.data['success'] == true) {
+      return ReportSummary.fromJson(
+        Map<String, dynamic>.from(res.data),
+      );
+    } else {
+      throw Exception(res.data['error'] ?? 'Gagal memuat laporan');
     }
   }
 }
