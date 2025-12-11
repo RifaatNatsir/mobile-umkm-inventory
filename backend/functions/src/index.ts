@@ -26,6 +26,55 @@ app.get("/health", (_req: Request, res: Response) => {
 // ============== ITEMS COLLECTION =============
 const itemsCol = db.collection("items");
 const salesCol = db.collection("sales");
+const usersCol = db.collection("users");
+
+// ========== LOGIN ==========
+app.post("/login", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      res.status(400).json({ error: "Email dan password wajib diisi" });
+      return;
+    }
+
+    const snap = await usersCol.where("email", "==", email).limit(1).get();
+
+    if (snap.empty) {
+      res.status(401).json({ error: "Email atau password salah" });
+      return;
+    }
+
+    const doc = snap.docs[0];
+    const data = doc.data() as {
+      name?: string;
+      email?: string;
+      password?: string;
+    };
+
+    if (data.password !== password) {
+      res.status(401).json({ error: "Email atau password salah" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: doc.id,
+        name: data.name ?? "",
+        email: data.email ?? "",
+      },
+    });
+    return;
+  } catch (err: any) {
+    console.error("POST /login error:", err);
+    res.status(500).json({
+      error: "Login gagal",
+      details: err?.message ?? String(err),
+    });
+    return;
+  }
+});
 
 // GET /items  -> list barang
 app.get("/items", async (_req: Request, res: Response): Promise<void> => {
@@ -99,22 +148,20 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
     const lowStockItems: any[] = [];
 
     await db.runTransaction(async (tx) => {
-      // 1) Siapkan ref untuk semua item
       const itemEntries = items.map((entry) => ({
         itemId: entry.itemId,
         quantity: entry.quantity,
         ref: itemsCol.doc(entry.itemId),
       }));
 
-      // 2) BACA SEMUA ITEM DULU (SEMUA READ)
       const snapshots = await Promise.all(
         itemEntries.map((e) => tx.get(e.ref))
       );
 
       const saleItems: any[] = [];
       let grandTotal = 0;
+      let grandProfit = 0;
 
-      // 3) BARU PROSES & TULIS (WRITE) SETELAH SEMUA READ SELESAI
       snapshots.forEach((snap, index) => {
         const { itemId, quantity, ref } = itemEntries[index];
 
@@ -125,6 +172,7 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
         const itemData: any = snap.data();
         const currentStock = Number(itemData.stock ?? 0);
         const unitPrice = Number(itemData.sellingPrice ?? 0);
+        const purchasePrice = Number(itemData.purchasePrice ?? 0);
         const minStock = Number(itemData.minStock ?? 0);
 
         if (!quantity || quantity <= 0) {
@@ -139,8 +187,8 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
 
         const newStock = currentStock - quantity;
         const totalPrice = unitPrice * quantity;
+        const profit = (unitPrice - purchasePrice) * quantity;
 
-        // UPDATE STOK (WRITE)
         tx.update(ref, {
           stock: newStock,
           updatedAt: now,
@@ -151,7 +199,9 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
           itemName: itemData.name ?? "",
           quantity,
           unitPrice,
+          purchasePrice,
           totalPrice,
+          profit,
         });
 
         if (newStock <= minStock) {
@@ -164,20 +214,21 @@ app.post("/sales", async (req: Request, res: Response): Promise<void> => {
         }
 
         grandTotal += totalPrice;
+        grandProfit += profit;
       });
 
-      // 4) SIMPAN DOKUMEN TRANSAKSI (WRITE)
       const saleRef = salesCol.doc();
       tx.set(saleRef, {
         items: saleItems,
         totalPrice: grandTotal,
+        totalProfit: grandProfit,
         createdAt: now,
       });
     });
 
-    res.status(201).json({ 
+    res.status(201).json({
       success: true,
-      lowStockItems 
+      lowStockItems,
     });
   } catch (err: any) {
     console.error("POST /sales error:", err);
@@ -291,6 +342,61 @@ app.delete(
     }
   }
 );
+
+// ============== REPORTS SUMMARY =============
+app.get("/reports/summary", async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const snap = await salesCol.get();
+
+    let totalRevenue = 0;
+    let totalProfit = 0;
+
+    const perDay = new Map<string, { revenue: number; profit: number }>();
+
+    snap.forEach((doc) => {
+      const data = doc.data() as any;
+
+      const revenue = Number(data.totalPrice ?? 0);
+      const profit = Number(data.totalProfit ?? 0);
+
+      totalRevenue += revenue;
+      totalProfit += profit;
+
+      // Normalize createdAt
+      let createdAt: Date;
+      const raw = data.createdAt;
+      if (raw && typeof raw.toDate === "function") createdAt = raw.toDate();
+      else createdAt = new Date(raw);
+
+      const key = createdAt.toISOString().slice(0, 10); // yyyy-mm-dd
+
+      const prev = perDay.get(key) ?? { revenue: 0, profit: 0 };
+      prev.revenue += revenue;
+      prev.profit += profit;
+      perDay.set(key, prev);
+    });
+
+    const series = Array.from(perDay.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({
+        date,
+        revenue: v.revenue,
+        profit: v.profit,
+      }));
+
+    res.json({
+      success: true,
+      totalRevenue,
+      totalProfit,
+      series,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: "Gagal mengambil laporan",
+      details: err?.message,
+    });
+  }
+});
 
 // Export 1 fungsi HTTPS v2
 export const api = onRequest((req, res) => app(req, res));
